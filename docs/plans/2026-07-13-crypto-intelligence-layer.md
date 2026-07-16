@@ -4,28 +4,35 @@
 
 **Goal:** Osiris'in kripto modülünü, halka açık panoyu (globe.coinhit.net), Pythia'yı, coinhit-engine içerik motorunu ve iç sinyalleri besleyen merkezi bir kripto istihbarat katmanına dönüştürmek.
 
-**Architecture:** Python worker (`coinhit-engine/services/crypto_ingest/`) dış kaynaklardan (Binance, on-chain, DefiLlama, OFAC) veri toplar, mevcut `coinhit` postgres'inde yeni `crypto` şemasına yazar. Osiris (Next.js, PM2 ile çalışıyor) bu şemayı okuyan API rotaları sunar; küre UI bu rotalardan beslenir. Pythia ve coinhit-engine aynı rotaları/şemayı tüketir. Redis pub/sub yalnızca Faz 4'te (sinyal bus) eklenir — Faz 1-3 için gerekli değil (YAGNI).
+**Architecture:** Python worker (`~/crypto-ingest/services/`) dış kaynaklardan (Binance via ccxt, on-chain, DefiLlama, OFAC) veri toplar, kendi dedicated postgres'inde (`crypto-db`) `crypto` şemasına yazar. Osiris (Next.js, PM2 ile çalışıyor) bu şemayı okuyan API rotaları sunar; küre UI bu rotalardan beslenir. Pythia ve içerik motoru aynı rotaları/şemayı tüketir. Redis pub/sub yalnızca Faz 4'te (sinyal bus) eklenir — Faz 1-3 için gerekli değil (YAGNI).
 
-**Tech Stack:** Python 3.11 (worker, coinhit-engine `.venv`, psycopg3), PostgreSQL 16/pgvector (mevcut `coinhit-pipeline-db`, 127.0.0.1:5433), Next.js 16 / TypeScript (Osiris API rotaları), `pg` npm paketi (yeni), systemd (worker servisi), vitest (Osiris testleri), pytest (worker testleri).
+**Tech Stack:** Python 3.11 (worker, `~/crypto-ingest/.venv`, psycopg3, **ccxt** — borsa verisi için unified API), PostgreSQL 16 (dedicated `crypto-db` container, 127.0.0.1:5434), Next.js 16 / TypeScript (Osiris API rotaları), `pg` npm paketi (yeni), systemd (worker servisi), vitest (Osiris testleri), pytest (worker testleri).
 
 **Referans:** Tasarım dokümanı — `docs/plans/2026-07-13-crypto-intelligence-layer-design.md`
 
 ---
 
+## ⚠️ 2026-07-16 Mimari Revizyonu
+
+Faz 1 yürütülürken (Task 1.1 tamamlandıktan sonra) `~/coinhit-engine` — bu planın orijinal hedefi — kullanıcı tarafından farklı bir sunucuya taşınan büyük bir mikroservis göçü kapsamında repurpose edildi: git geçmişi ve `coinhit-pipeline-db` container'ı kayboldu, dizin artık alakasız SEO scriptleri barındırıyor. Bu sunucu artık **özellikle bu proje (kripto istihbarat katmanı) için ayrılmış**. Karar: eski coinhit-engine'e dokunmadan, tamamen bağımsız yeni bir proje kuruldu. Aşağıdaki "Ortam Notları" bunu yansıtacak şekilde güncellendi; Task 1.1 yeni altyapıya karşı yeniden uygulandı (aynı şema, yeni host).
+
 ## Ortam Notları (bir engineer'ın bilmesi gerekenler)
 
 - **Osiris** (`~/osiris`) PM2 ile çalışıyor (`pm2 list` → `osiris`), `next start`, port 3000. Kod değişikliğinden sonra: `npm run build && pm2 restart osiris`.
-- **coinhit-engine** (`~/coinhit-engine`) servisleri systemd ile yönetiliyor: sürekli servisler `Type=simple, Restart=always` (örn. `coinhit-enricher.service`), periyodik işler `Type=oneshot` + `.timer` (örn. `coinhit-curator.service/.timer`). Python venv: `~/coinhit-engine/.venv`.
-- **Postgres**: `coinhit-pipeline-db` container, db=`coinhit`, `127.0.0.1:5433`, şifre `PIPELINE_DB_PASSWORD` env'de (`~/coinhit-engine/.env`). Bağlantı: `DATABASE_URL=postgresql://coinhit:***@127.0.0.1:5433/coinhit`. Şema kalıbı: her alan kendi şeması (`news`, `pipeline`, şimdi `crypto`).
-- **`coinhit-engine/services/common.py`** zaten `db()` (psycopg autocommit connection) ve `RateLimitedClient` (rate-limit + postgres cache + backoff) sağlıyor — worker bunu import edip yeniden kullanacak.
+- **crypto-ingest** (`~/crypto-ingest`) — worker'ın kendi bağımsız projesi, ayrı git repo. Python venv: `~/crypto-ingest/.venv` (uv ile kuruldu: `uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt`). Bağımlılıklar: `psycopg[binary]`, `httpx`, `python-dotenv`, `pytest`, `ccxt`.
+- **Postgres**: `crypto-db` container (postgres:16-alpine, plain — pgvector gerekmiyor), db=`crypto`, `127.0.0.1:5434`, şifre `CRYPTO_DB_PASSWORD` env'de (`~/crypto-ingest/.env`, otomatik üretildi). Bağlantı: `DATABASE_URL` aynı `.env` dosyasında hazır. Başlatma: `cd ~/crypto-ingest && docker compose up -d`.
+- **`crypto-ingest/services/db.py`** minimal `db()` (psycopg autocommit connection) sağlıyor — eski `coinhit-engine/services/common.py`'nin yerini alan, bağımsız, sade bir modül. `RateLimitedClient` yok; ccxt kendi rate-limiting'ini (`enableRateLimit: True`) yapıyor, keyless REST kaynakları (CoinGecko, alternative.me, blockchain.info, ETH RPC) için basit `httpx` çağrıları yeterli.
 - **Osiris testleri**: `*.test.ts` kaynak dosyasının yanında, `vitest run` ile çalışır. Dış ağ gerektiren testler `RUN_LIVE_TESTS=1 vitest run` ile opsiyonel — bkz. `src/app/api/cctv/utah.test.ts` örneği (saf fonksiyonlar test edilir, canlı fetch ayrı gate'lenir).
-- **Redis**: Şu an dedicated bir redis yok; `social_redis_1` var ama izole `social_internal_network`'te, paylaşmak gereksiz karmaşıklık katar. Faz 4'te `crypto-redis` adında yeni, küçük bir redis container'ı `coinhit-engine_default` ağına eklenecek (port 6380, host-only).
+- **Redis**: Faz 1-3 için gerekli değil. Faz 4'te sinyal bus için dedicated `crypto-redis` container'ı `crypto-ingest`'in docker-compose'una eklenecek.
+- **coinhit-engine (eski)**: artık yok/repurpose edildi — bu plan referans vermez, dokunulmaz.
 
 ---
 
 ## FAZ 1 — Piyasa + Balina Takibi (tam TDD detayı)
 
-### Task 1.1: `crypto` postgres şeması
+### Task 1.1: `crypto` postgres şeması ✅ TAMAMLANDI (2026-07-16, yeni altyapıya karşı yeniden uygulandı)
+
+> Aşağıdaki adımlar orijinal (coinhit-engine hedefli) haliyle tarihsel referans için korunuyor. Gerçekte uygulanan: aynı SQL, `~/crypto-ingest/db/crypto_schema.sql`, `docker exec -i crypto-db psql -U crypto -d crypto`. Commit: `~/crypto-ingest` reposunda `1344aef` (bootstrap commit'in parçası).
 
 **Files:**
 - Create: `~/coinhit-engine/db/crypto_schema.sql`
@@ -80,86 +87,91 @@ cd ~/coinhit-engine && git add db/crypto_schema.sql && git commit -m "feat(crypt
 
 ---
 
-### Task 1.2: Worker iskeleti + Binance piyasa toplayıcı
+### Task 1.2: Worker iskeleti + CCXT piyasa toplayıcı
+
+> **2026-07-16 revizyon:** Bu görev artık ham `requests` + Binance REST yerine **ccxt** kullanır (bkz. Ortam Notları). ccxt Binance'in borsa-spesifik tuhaflıklarını (sembol formatı, rate limit, hata kodları) soyutluyor ve Faz 2'nin türev toplayıcıları da aynı kütüphaneyi kullanacağı için tek bir öğrenme eğrisi yeterli.
 
 **Files:**
-- Create: `~/coinhit-engine/services/crypto_ingest/__init__.py` (boş)
-- Create: `~/coinhit-engine/services/crypto_ingest/collectors.py`
-- Test: `~/coinhit-engine/services/crypto_ingest/test_collectors.py`
+- Create: `~/crypto-ingest/services/collectors.py`
+- Test: `~/crypto-ingest/services/test_collectors.py`
 
 **Step 1: Saf fonksiyonlar için başarısız testi yaz**
 
-`collectors.py` henüz yokken, dönüşüm/filtreleme mantığını test eden dosyayı yaz (canlı ağ çağrısı olmayan kısım — Binance ticker JSON'unu bizim satır formatımıza çeviren fonksiyon):
+`collectors.py` henüz yokken, dönüşüm/filtreleme mantığını test eden dosyayı yaz (canlı ağ çağrısı olmayan kısım — ccxt'nin `fetch_tickers()` çıktısını bizim satır formatımıza çeviren fonksiyon):
 
 ```python
-# ~/coinhit-engine/services/crypto_ingest/test_collectors.py
-from collectors import parse_binance_ticker, TOP_SYMBOLS
+# ~/crypto-ingest/services/test_collectors.py
+from collectors import parse_tickers, TOP_SYMBOLS
 
-def test_parse_binance_ticker_filters_top_symbols_and_maps_fields():
-    raw = [
-        {"symbol": "BTCUSDT", "lastPrice": "65000.50", "quoteVolume": "1200000000", "priceChangePercent": "2.5"},
-        {"symbol": "UNKNOWNUSDT", "lastPrice": "1.0", "quoteVolume": "100", "priceChangePercent": "0"},
-    ]
-    result = parse_binance_ticker(raw)
+def test_parse_tickers_filters_top_symbols_and_maps_fields():
+    # ccxt fetch_tickers() şekli: {symbol: {last, quoteVolume, percentage, ...}}
+    raw = {
+        "BTC/USDT": {"symbol": "BTC/USDT", "last": 65000.50, "quoteVolume": 1200000000.0, "percentage": 2.5},
+        "UNKNOWN/USDT": {"symbol": "UNKNOWN/USDT", "last": 1.0, "quoteVolume": 100.0, "percentage": 0.0},
+    }
+    result = parse_tickers(raw)
     assert len(result) == 1
     assert result[0]["symbol"] == "BTC"
     assert result[0]["price_usd"] == 65000.50
     assert result[0]["volume_24h_usd"] == 1200000000.0
     assert result[0]["change_24h_pct"] == 2.5
 
-def test_parse_binance_ticker_skips_malformed_rows():
-    raw = [{"symbol": "BTCUSDT", "lastPrice": "not-a-number", "quoteVolume": "0", "priceChangePercent": "0"}]
-    assert parse_binance_ticker(raw) == []
+def test_parse_tickers_skips_missing_fields():
+    raw = {"BTC/USDT": {"symbol": "BTC/USDT", "last": None, "quoteVolume": 0.0, "percentage": 0.0}}
+    assert parse_tickers(raw) == []
 
 def test_top_symbols_includes_majors():
-    assert "BTCUSDT" in TOP_SYMBOLS
-    assert "ETHUSDT" in TOP_SYMBOLS
+    assert "BTC/USDT" in TOP_SYMBOLS
+    assert "ETH/USDT" in TOP_SYMBOLS
 ```
 
 **Step 2: Testi çalıştırıp başarısız olduğunu doğrula**
 
-Run: `cd ~/coinhit-engine/services/crypto_ingest && /home/ubuntu/coinhit-engine/.venv/bin/python -m pytest test_collectors.py -v`
+Run: `cd ~/crypto-ingest/services && ../.venv/bin/python -m pytest test_collectors.py -v`
 Expected: `ModuleNotFoundError: No module named 'collectors'` ile FAIL.
 
 **Step 3: Minimal implementasyonu yaz**
 
 ```python
-# ~/coinhit-engine/services/crypto_ingest/collectors.py
+# ~/crypto-ingest/services/collectors.py
 """Kripto istihbarat katmanı — veri toplayıcılar (Faz 1: piyasa + balina)."""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # common.py için
-from common import db, RateLimitedClient  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # db.py için
+import ccxt
+import httpx
+
+from db import db  # noqa: E402
 
 TOP_SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT',
-    'ADAUSDT', 'DOGEUSDT', 'MATICUSDT', 'DOTUSDT', 'LTCUSDT',
-    'TRXUSDT', 'AVAXUSDT', 'LINKUSDT', 'ATOMUSDT', 'ETCUSDT',
-    'XLMUSDT', 'UNIUSDT', 'NEARUSDT', 'APTUSDT', 'FILUSDT',
-    'ARBUSDT', 'OPUSDT', 'INJUSDT', 'SUIUSDT', 'PEPEUSDT',
-    'SHIBUSDT', 'AAVEUSDT', 'MKRUSDT', 'LDOUSDT', 'RNDRUSDT',
+    'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
+    'ADA/USDT', 'DOGE/USDT', 'DOT/USDT', 'LTC/USDT',
+    'TRX/USDT', 'AVAX/USDT', 'LINK/USDT', 'ATOM/USDT', 'ETC/USDT',
+    'XLM/USDT', 'UNI/USDT', 'NEAR/USDT', 'APT/USDT', 'FIL/USDT',
+    'ARB/USDT', 'OP/USDT', 'INJ/USDT', 'SUI/USDT', 'PEPE/USDT',
+    'SHIB/USDT', 'AAVE/USDT', 'MKR/USDT', 'LDO/USDT',
 ]
 
-_client = RateLimitedClient(rps={"binance": 5, "coingecko": 1, "alternative_me": 0.2})
+_exchange = ccxt.binance({"enableRateLimit": True})
+_http = httpx.Client(timeout=15)
 
 
-def parse_binance_ticker(raw: list[dict]) -> list[dict]:
-    """Binance /api/v3/ticker/24hr yanıtını crypto.markets satırlarına çevirir."""
+def parse_tickers(raw: dict) -> list[dict]:
+    """ccxt fetch_tickers() yanıtını crypto.markets satırlarına çevirir."""
     out = []
     top = set(TOP_SYMBOLS)
-    for item in raw:
-        if item.get("symbol") not in top:
+    for symbol, t in raw.items():
+        if symbol not in top:
             continue
-        try:
-            out.append({
-                "symbol": item["symbol"].replace("USDT", ""),
-                "price_usd": float(item["lastPrice"]),
-                "volume_24h_usd": float(item["quoteVolume"]),
-                "change_24h_pct": float(item["priceChangePercent"]),
-            })
-        except (KeyError, ValueError, TypeError):
+        if t.get("last") is None:
             continue
+        out.append({
+            "symbol": symbol.split("/")[0],
+            "price_usd": float(t["last"]),
+            "volume_24h_usd": float(t.get("quoteVolume") or 0),
+            "change_24h_pct": float(t.get("percentage") or 0),
+        })
     return out
 
 
@@ -167,13 +179,13 @@ def fetch_global_metrics() -> dict:
     """BTC dominance (CoinGecko) + Fear&Greed Index (alternative.me). Keyless."""
     dominance = None
     try:
-        g = _client.get_json("coingecko", "https://api.coingecko.com/api/v3/global", cache_ttl=120)
+        g = _http.get("https://api.coingecko.com/api/v3/global").json()
         dominance = g["data"]["market_cap_percentage"]["btc"]
     except Exception:
         pass
     fear_greed = None
     try:
-        f = _client.get_json("alternative_me", "https://api.alternative.me/fng/", cache_ttl=1800)
+        f = _http.get("https://api.alternative.me/fng/").json()
         fear_greed = int(f["data"][0]["value"])
     except Exception:
         pass
@@ -181,9 +193,9 @@ def fetch_global_metrics() -> dict:
 
 
 def collect_markets() -> int:
-    """Binance ticker + global metrikleri çeker, crypto.markets'e yazar. Yazılan satır sayısını döner."""
-    raw = _client.get_json("binance", "https://api.binance.com/api/v3/ticker/24hr", cache_ttl=20)
-    rows = parse_binance_ticker(raw)
+    """ccxt ile Binance ticker + global metrikleri çeker, crypto.markets'e yazar. Yazılan satır sayısını döner."""
+    raw = _exchange.fetch_tickers(TOP_SYMBOLS)
+    rows = parse_tickers(raw)
     if not rows:
         return 0
     globals_ = fetch_global_metrics()
@@ -201,21 +213,21 @@ def collect_markets() -> int:
 
 **Step 4: Testi tekrar çalıştır, geçtiğini doğrula**
 
-Run: `cd ~/coinhit-engine/services/crypto_ingest && /home/ubuntu/coinhit-engine/.venv/bin/python -m pytest test_collectors.py -v`
+Run: `cd ~/crypto-ingest/services && ../.venv/bin/python -m pytest test_collectors.py -v`
 Expected: 3 test PASS.
 
 **Step 5: Canlı entegrasyonu elle doğrula (network gerekli)**
 
-Run: `cd ~/coinhit-engine/services/crypto_ingest && /home/ubuntu/coinhit-engine/.venv/bin/python -c "from collectors import collect_markets; print(collect_markets())"`
-Expected: `30` (veya Binance'in döndürdüğü eşleşen sembol sayısı) — hata yok.
+Run: `cd ~/crypto-ingest/services && ../.venv/bin/python -c "from collectors import collect_markets; print(collect_markets())"`
+Expected: `28` (veya ccxt'nin döndürdüğü eşleşen sembol sayısı) — hata yok.
 
-Run: `docker exec -i coinhit-pipeline-db psql -U coinhit -d coinhit -c "SELECT symbol, price_usd, btc_dominance_pct FROM crypto.markets ORDER BY collected_at DESC LIMIT 3;"`
+Run: `docker exec -i crypto-db psql -U crypto -d crypto -c "SELECT symbol, price_usd, btc_dominance_pct FROM crypto.markets ORDER BY collected_at DESC LIMIT 3;"`
 Expected: 3 satır, gerçek fiyatlarla.
 
 **Step 6: Commit**
 
 ```bash
-cd ~/coinhit-engine && git add services/crypto_ingest/ && git commit -m "feat(crypto): add market data collector with tests"
+cd ~/crypto-ingest && git add services/ && git commit -m "feat(crypto): add ccxt-based market data collector with tests"
 ```
 
 ---
@@ -223,8 +235,8 @@ cd ~/coinhit-engine && git add services/crypto_ingest/ && git commit -m "feat(cr
 ### Task 1.3: Balina takibi toplayıcı (BTC mempool + ETH son blok, keyless)
 
 **Files:**
-- Modify: `~/coinhit-engine/services/crypto_ingest/collectors.py`
-- Modify: `~/coinhit-engine/services/crypto_ingest/test_collectors.py`
+- Modify: `~/crypto-ingest/services/collectors.py`
+- Modify: `~/crypto-ingest/services/test_collectors.py`
 
 **Step 1: Saf filtreleme fonksiyonu için başarısız test yaz**
 
@@ -281,7 +293,7 @@ def collect_btc_whales() -> int:
     btc_price = _latest_btc_price()
     if not btc_price:
         return 0
-    data = _client.get_json("blockchain_info", "https://blockchain.info/unconfirmed-transactions?format=json", cache_ttl=30)
+    data = _http.get("https://blockchain.info/unconfirmed-transactions?format=json").json()
     candidates = []
     for tx in data.get("txs", []):
         total_sat = sum(o.get("value", 0) for o in tx.get("out", []))
@@ -300,13 +312,10 @@ def collect_eth_whales() -> int:
     eth_price = _latest_eth_price()
     if not eth_price:
         return 0
-    latest = _client.get_json(
-        "eth_rpc", "https://ethereum-rpc.publicnode.com",
-        cache_ttl=10,
-        # NOT: RateLimitedClient GET kullanır; JSON-RPC POST gerektirdiğinden
-        # burada doğrudan httpx.Client POST ile çağrılır (bkz. gerçek dosyada
-        # _client._http.post kullanımı) — testte mock'lanır.
-    )
+    latest = _http.post(
+        "https://ethereum-rpc.publicnode.com",
+        json={"jsonrpc": "2.0", "method": "eth_getBlockByNumber", "params": ["latest", True], "id": 1},
+    ).json()
     candidates = []
     for tx in latest.get("result", {}).get("transactions", []):
         try:
@@ -335,22 +344,20 @@ def _insert_whales(whales: list[dict]) -> None:
             )
 ```
 
-> Not: `collect_eth_whales` içindeki ETH JSON-RPC çağrısı `RateLimitedClient.get_json` bir GET yapar; JSON-RPC POST gerektirir. Implementasyon sırasında `_client._http.post(url, json={"jsonrpc":"2.0","method":"eth_getBlockByNumber","params":["latest",True],"id":1})` kullanılmalı — plan taslağı basitlik için `get_json` gösteriyor, gerçek kodda POST'a çevrilecek. Bu satırı yazarken testle doğrula.
-
 **Step 4: Testi çalıştır, geçtiğini doğrula**
 
-Run: `.venv/bin/python -m pytest test_collectors.py -v`
+Run: `cd ~/crypto-ingest/services && ../.venv/bin/python -m pytest test_collectors.py -v`
 Expected: tüm testler (piyasa + whale filtre) PASS.
 
 **Step 5: Canlı doğrulama**
 
-Run: `.venv/bin/python -c "from collectors import collect_btc_whales, collect_eth_whales; print('BTC:', collect_btc_whales()); print('ETH:', collect_eth_whales())"`
+Run: `cd ~/crypto-ingest/services && ../.venv/bin/python -c "from collectors import collect_btc_whales, collect_eth_whales; print('BTC:', collect_btc_whales()); print('ETH:', collect_eth_whales())"`
 Expected: hata yok, 0 veya daha fazla whale sayısı (eşik yüksek olduğundan çoğu döngüde 0 normal).
 
 **Step 6: Commit**
 
 ```bash
-cd ~/coinhit-engine && git add services/crypto_ingest/ && git commit -m "feat(crypto): add BTC/ETH whale transfer collectors"
+cd ~/crypto-ingest && git add services/ && git commit -m "feat(crypto): add BTC/ETH whale transfer collectors"
 ```
 
 ---
@@ -358,13 +365,13 @@ cd ~/coinhit-engine && git add services/crypto_ingest/ && git commit -m "feat(cr
 ### Task 1.4: Worker döngüsü + systemd servisi
 
 **Files:**
-- Create: `~/coinhit-engine/services/crypto_ingest/worker.py`
+- Create: `~/crypto-ingest/services/worker.py`
 - Create (root, sudo ile kopyalanacak): `/tmp/crypto-ingest.service`
 
 **Step 1: worker.py yaz**
 
 ```python
-# ~/coinhit-engine/services/crypto_ingest/worker.py
+# ~/crypto-ingest/services/worker.py
 """Kripto istihbarat worker — surekli dongu, farkli araliklarla toplayicilari cagirir."""
 import time
 import traceback
@@ -406,7 +413,7 @@ if __name__ == "__main__":
 
 **Step 2: Elle kısa süre çalıştır**
 
-Run: `cd ~/coinhit-engine/services/crypto_ingest && timeout 40 /home/ubuntu/coinhit-engine/.venv/bin/python worker.py`
+Run: `cd ~/crypto-ingest/services && timeout 40 /home/ubuntu/crypto-ingest/.venv/bin/python worker.py`
 Expected: `crypto-ingest worker started` sonra `[markets] N satir yazildi` satırı 30sn içinde görünür, hata yok, 40sn sonra timeout ile çıkar (normal).
 
 **Step 3: systemd unit dosyasını yaz**
@@ -422,8 +429,8 @@ Wants=network-online.target
 Type=simple
 User=ubuntu
 Group=ubuntu
-WorkingDirectory=/home/ubuntu/coinhit-engine/services/crypto_ingest
-ExecStart=/home/ubuntu/coinhit-engine/.venv/bin/python worker.py
+WorkingDirectory=/home/ubuntu/crypto-ingest/services
+ExecStart=/home/ubuntu/crypto-ingest/.venv/bin/python worker.py
 Restart=always
 RestartSec=5
 
@@ -451,7 +458,7 @@ Expected: `[markets] ... satir yazildi` satırları, hata yok.
 **Step 6: Commit**
 
 ```bash
-cd ~/coinhit-engine && git add services/crypto_ingest/worker.py && git commit -m "feat(crypto): add ingest worker loop and systemd service"
+cd ~/crypto-ingest && git add services/worker.py && git commit -m "feat(crypto): add ingest worker loop and systemd service"
 ```
 
 ---
@@ -474,10 +481,10 @@ Expected: `package.json`'a `pg` ve `@types/pg` eklenir, hata yok.
 
 `.env.example`'a ekle:
 ```
-# Kripto istihbarat katmanı — coinhit postgres (crypto şeması, read-only kullanım)
-CRYPTO_DATABASE_URL=postgresql://coinhit:PASSWORD@127.0.0.1:5433/coinhit
+# Kripto istihbarat katmanı — dedicated crypto-db postgres (read-only kullanım)
+CRYPTO_DATABASE_URL=postgresql://crypto:PASSWORD@127.0.0.1:5434/crypto
 ```
-`.env` dosyasına gerçek şifreyle aynı satırı ekle (şifre `~/coinhit-engine/.env` içindeki `PIPELINE_DB_PASSWORD` ile aynı olmalı).
+`.env` dosyasına gerçek şifreyle aynı satırı ekle (şifre `~/crypto-ingest/.env` içindeki `CRYPTO_DB_PASSWORD`/`DATABASE_URL` ile aynı olmalı — o dosyadan `DATABASE_URL` satırını doğrudan kopyalamak en güvenlisi).
 
 **Step 3: Saf dönüşüm fonksiyonu için başarısız test yaz**
 
