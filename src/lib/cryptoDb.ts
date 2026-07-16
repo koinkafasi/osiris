@@ -9,6 +9,7 @@ export function getCryptoDb(): Pool {
       throw new Error('CRYPTO_DATABASE_URL is not set');
     }
     pool = new Pool({ connectionString, max: 5, idleTimeoutMillis: 30000 });
+    pool.on('error', (err) => console.error('crypto pg pool error:', err));
   }
   return pool;
 }
