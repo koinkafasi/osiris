@@ -1,9 +1,25 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest, NextFetchEvent } from 'next/server';
+import { verifySessionToken, SESSION_COOKIE_NAME } from '@/lib/session';
 
-export function middleware(request: NextRequest, event: NextFetchEvent) {
+export async function middleware(request: NextRequest, event: NextFetchEvent) {
   const url = request.nextUrl.pathname;
-  
+
+  // Site login gate — page routes only (this matcher already excludes /api/*,
+  // so Pythia and other server-to-server data consumers are unaffected).
+  if (url !== '/login') {
+    const secret = process.env.SESSION_SECRET;
+    if (secret) {
+      const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+      const authed = await verifySessionToken(token, secret);
+      if (!authed) {
+        const loginUrl = new URL('/login', request.url);
+        loginUrl.searchParams.set('next', url);
+        return NextResponse.redirect(loginUrl);
+      }
+    }
+  }
+
   const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || '127.0.0.1';
   const userAgent = request.headers.get('user-agent') || 'Unknown OSIRIS Client';
   
