@@ -197,6 +197,10 @@ OPENSKY_CLIENT_ID=            # OpenSky OAuth2 (since Mar 2025) — opensky-netw
 OPENSKY_CLIENT_SECRET=
 N2YO_API_KEY=                 # N2YO satellites — n2yo.com (Profile → API key)
 AIS_API_KEY=                 # aisstream.io maritime
+
+# Crypto Intelligence Layer
+CRYPTO_SIGNALS_API_KEY=       # Static bearer token protecting /api/crypto/signals route
+TELEGRAM_GROUP_INVITE_LINK=   # Telegram grup davet linki — CryptoPanel'deki QR daveti icin (bossa "Not configured" hatasi gosterilir)
 ```
 
 > Without `SCANNER_URL`/`SCANNER_KEY` the RECON toolkit returns `503`; every
