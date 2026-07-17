@@ -1,7 +1,15 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Pin the workspace root to this project — without this, Next.js
+  // auto-detects a "workspace root" by walking up for lockfiles and
+  // picks up an unrelated ~/package-lock.json in the home directory,
+  // causing its build-time file tracer to scan (and fail on
+  // permission-restricted files in) unrelated directories like
+  // ~/traefik/dynamic/.
+  outputFileTracingRoot: path.join(__dirname),
   serverExternalPackages: ['ws'],
   transpilePackages: ['react-map-gl', 'mapbox-gl', 'maplibre-gl'],
   typescript: {
