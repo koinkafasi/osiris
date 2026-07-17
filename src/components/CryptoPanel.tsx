@@ -1,11 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { LucideIcon } from 'lucide-react';
 import {
   Bitcoin, TrendingUp, TrendingDown, ChevronDown, ChevronUp,
-  Zap, Waves, Flame, Layers, Coins, Globe2, ShieldAlert,
+  Zap, Waves, Flame, Layers, Coins, Globe2, ShieldAlert, Maximize2, Minimize2,
 } from 'lucide-react';
 
 // ── Response shapes — mirrored from src/app/api/crypto/*/route.ts ──
@@ -152,7 +153,15 @@ function Row({ left, right, rightColor }: { left: React.ReactNode; right: React.
 
 export default function CryptoPanel() {
   const [expanded, setExpanded] = useState(true);
+  const [maximized, setMaximized] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionKey>('markets');
+
+  // Portal only renders on the client
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  // Show more rows per section when maximized — there's room for it.
+  const rowLimit = (n: number) => (maximized ? n * 3 : n);
 
   const markets = useCryptoFeed<MarketsResponse>('markets', 30000);
   const derivatives = useCryptoFeed<DerivativesResponse>('derivatives', 60000);
@@ -176,8 +185,8 @@ export default function CryptoPanel() {
 
   const firstMarket = markets?.markets?.[0];
 
-  return (
-    <div className="glass-panel p-3">
+  const content = (
+    <div className={`glass-panel p-3 transition-all duration-300 flex flex-col ${maximized ? 'fixed inset-4 z-[9999] bg-[#0a0a09]/95 backdrop-blur-3xl' : ''}`}>
       <button onClick={() => setExpanded(!expanded)} className="flex items-center justify-between w-full mb-2">
         <div className="flex items-center gap-2">
           <Bitcoin className="w-3.5 h-3.5 text-[var(--gold-primary)]" />
@@ -186,6 +195,9 @@ export default function CryptoPanel() {
         </div>
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-1.5 rounded-full bg-[var(--alert-green)] animate-osiris-pulse" />
+          <button onClick={(e) => { e.stopPropagation(); setMaximized(!maximized); if (!expanded && !maximized) setExpanded(true); }} className="hover:text-white transition-colors" title={maximized ? 'Restore' : 'Maximize'}>
+            {maximized ? <Minimize2 className="w-3.5 h-3.5 text-[var(--text-muted)]" /> : <Maximize2 className="w-3.5 h-3.5 text-[var(--text-muted)]" />}
+          </button>
           {expanded ? <ChevronUp className="w-3.5 h-3.5 text-[var(--text-muted)]" /> : <ChevronDown className="w-3.5 h-3.5 text-[var(--text-muted)]" />}
         </div>
       </button>
@@ -226,12 +238,12 @@ export default function CryptoPanel() {
             </div>
 
             {/* Content */}
-            <div className="space-y-0.5 overflow-y-auto styled-scrollbar max-h-56">
+            <div className={`space-y-0.5 overflow-y-auto styled-scrollbar ${maximized ? 'flex-1' : 'max-h-56'}`}>
               {!loadedBySection[activeSection] && <EmptyRow label="Yükleniyor..." />}
 
               {activeSection === 'markets' && markets && (
                 markets.markets.length
-                  ? markets.markets.slice(0, 12).map((m) => (
+                  ? markets.markets.slice(0, rowLimit(12)).map((m) => (
                       <Row key={m.symbol}
                         left={m.symbol}
                         right={`${formatPrice(m.price_usd)} (${formatPct(m.change_24h_pct)})`}
@@ -242,7 +254,7 @@ export default function CryptoPanel() {
 
               {activeSection === 'derivatives' && derivatives && (
                 derivatives.derivatives.length
-                  ? derivatives.derivatives.slice(0, 12).map((d) => (
+                  ? derivatives.derivatives.slice(0, rowLimit(12)).map((d) => (
                       <Row key={d.symbol}
                         left={d.symbol}
                         right={`fund ${formatFunding(d.funding_rate)} · OI ${formatUsd(d.open_interest_usd)}`}
@@ -253,7 +265,7 @@ export default function CryptoPanel() {
 
               {activeSection === 'whales' && whales && (
                 whales.whales.length
-                  ? whales.whales.slice(0, 15).map((w) => (
+                  ? whales.whales.slice(0, rowLimit(15)).map((w) => (
                       <Row key={w.tx_hash}
                         left={`${w.chain} → ${truncateAddr(w.to_address)}`}
                         right={formatUsd(w.value_usd)} />
@@ -263,7 +275,7 @@ export default function CryptoPanel() {
 
               {activeSection === 'liquidations' && liquidations && (
                 liquidations.liquidations.length
-                  ? liquidations.liquidations.slice(0, 15).map((l, i) => (
+                  ? liquidations.liquidations.slice(0, rowLimit(15)).map((l, i) => (
                       <Row key={`${l.symbol}-${l.observed_at}-${i}`}
                         left={`${l.symbol} ${l.side}`}
                         right={formatUsd(l.value_usd)}
@@ -274,7 +286,7 @@ export default function CryptoPanel() {
 
               {activeSection === 'defi' && defi && (
                 defi.defi.length
-                  ? defi.defi.slice(0, 15).map((p) => (
+                  ? defi.defi.slice(0, rowLimit(15)).map((p) => (
                       <Row key={p.protocol}
                         left={`${p.protocol}${p.category ? ` · ${p.category}` : ''}`}
                         right={formatUsd(p.tvl_usd)} />
@@ -284,7 +296,7 @@ export default function CryptoPanel() {
 
               {activeSection === 'stablecoins' && stablecoins && (
                 stablecoins.stablecoins.length
-                  ? stablecoins.stablecoins.slice(0, 12).map((s) => (
+                  ? stablecoins.stablecoins.slice(0, rowLimit(12)).map((s) => (
                       <Row key={s.symbol}
                         left={s.symbol}
                         right={`${formatUsd(s.circulating_usd)} (${s.net_change_usd !== null && s.net_change_usd >= 0 ? '+' : ''}${formatUsd(s.net_change_usd)})`}
@@ -295,7 +307,7 @@ export default function CryptoPanel() {
 
               {activeSection === 'geo' && geo && (
                 geo.geo.length
-                  ? geo.geo.slice(0, 12).map((g, i) => (
+                  ? geo.geo.slice(0, rowLimit(12)).map((g, i) => (
                       <Row key={`${g.kind}-${g.country}-${i}`}
                         left={`${g.country} (${g.kind.replace(/_/g, ' ')})`}
                         right={`${g.metric_value}%`} />
@@ -309,7 +321,7 @@ export default function CryptoPanel() {
                     Başlangıç listesi — kapsamlı OFAC/SDN taraması değildir
                   </div>
                   {compliance.compliance.length
-                    ? compliance.compliance.slice(0, 15).map((c, i) => (
+                    ? compliance.compliance.slice(0, rowLimit(15)).map((c, i) => (
                         <Row key={`${c.address}-${c.observed_at}-${i}`}
                           left={`${c.chain} · ${c.list_name}`}
                           right={truncateAddr(c.address)}
@@ -324,4 +336,10 @@ export default function CryptoPanel() {
       </AnimatePresence>
     </div>
   );
+
+  if (maximized && mounted && typeof document !== 'undefined') {
+    return createPortal(content, document.body);
+  }
+
+  return content;
 }
