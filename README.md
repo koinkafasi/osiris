@@ -166,6 +166,16 @@ docker run -d -p 3000:3000 --env-file .env ghcr.io/aiacos/osiris:latest
 `.env` to change the published host port (e.g. `OSIRIS_PORT=3005`) without
 editing the compose file.
 
+**This fork's image (Docker Hub)** — the GHCR image above tracks the upstream
+project and does NOT include this fork's crypto-intelligence layer or login
+gate. For a recovery/one-shot-bootstrap image that matches this branch
+(`feature/crypto-intelligence-layer`) exactly:
+
+```bash
+docker pull theblackstone/osiris:latest
+docker run -d -p 3000:3000 --env-file .env theblackstone/osiris:latest
+```
+
 ### Environment Variables
 
 OSIRIS works **partially without any API keys** — all core feeds use public,
