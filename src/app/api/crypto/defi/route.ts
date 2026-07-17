@@ -20,6 +20,7 @@ export async function GET() {
       `SELECT protocol, chain, category, tvl_usd::float8 AS tvl_usd, collected_at
        FROM crypto.defi_tvl
        WHERE collected_at > now() - interval '15 minutes'
+         AND collected_at > (SELECT max(collected_at) FROM crypto.defi_tvl) - interval '10 seconds'
        ORDER BY tvl_usd DESC`
     );
     return NextResponse.json(

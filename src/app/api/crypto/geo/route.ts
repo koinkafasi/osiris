@@ -19,6 +19,7 @@ export async function GET() {
       `SELECT kind, country, metric_value, collected_at
        FROM crypto.geo_nodes
        WHERE collected_at > now() - interval '3 hours'
+         AND collected_at > (SELECT max(collected_at) FROM crypto.geo_nodes) - interval '10 seconds'
        ORDER BY metric_value DESC`
     );
     return NextResponse.json(

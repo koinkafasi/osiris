@@ -23,6 +23,7 @@ export async function GET() {
       `SELECT symbol, circulating_usd::float8 AS circulating_usd, net_change_usd::float8 AS net_change_usd, collected_at
        FROM crypto.stablecoin_flows
        WHERE collected_at > now() - interval '15 minutes'
+         AND collected_at > (SELECT max(collected_at) FROM crypto.stablecoin_flows) - interval '10 seconds'
        ORDER BY circulating_usd DESC`
     );
     return NextResponse.json(
