@@ -304,14 +304,19 @@ export default function CryptoPanel() {
               )}
 
               {activeSection === 'compliance' && compliance && (
-                compliance.compliance.length
-                  ? compliance.compliance.slice(0, 15).map((c, i) => (
-                      <Row key={`${c.address}-${c.observed_at}-${i}`}
-                        left={`${c.chain} · ${c.list_name}`}
-                        right={truncateAddr(c.address)}
-                        rightColor="var(--alert-red)" />
-                    ))
-                  : <EmptyRow label="Eşleşme yok (son 24s)" />
+                <>
+                  <div className="text-[9px] font-mono text-[var(--text-muted)] px-1 pb-1.5 leading-tight">
+                    Başlangıç listesi — kapsamlı OFAC/SDN taraması değildir
+                  </div>
+                  {compliance.compliance.length
+                    ? compliance.compliance.slice(0, 15).map((c, i) => (
+                        <Row key={`${c.address}-${c.observed_at}-${i}`}
+                          left={`${c.chain} · ${c.list_name}`}
+                          right={truncateAddr(c.address)}
+                          rightColor="var(--alert-red)" />
+                      ))
+                    : <EmptyRow label="Eşleşme yok (son 24s)" />}
+                </>
               )}
             </div>
           </motion.div>
