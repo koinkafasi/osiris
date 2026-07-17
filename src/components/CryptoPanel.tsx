@@ -7,7 +7,9 @@ import type { LucideIcon } from 'lucide-react';
 import {
   Bitcoin, TrendingUp, TrendingDown, ChevronDown, ChevronUp,
   Zap, Waves, Flame, Layers, Coins, Globe2, ShieldAlert, Maximize2, Minimize2,
+  Siren, QrCode,
 } from 'lucide-react';
+import { getTelegramInviteQr } from '@/app/actions/telegram-invite';
 
 // ── Response shapes — mirrored from src/app/api/crypto/*/route.ts ──
 interface MarketRow {
@@ -67,6 +69,13 @@ interface ComplianceRow {
   matched_whale_tx_hash: string | null;
   observed_at: string;
 }
+interface SignalRow {
+  signal_type: string;
+  severity: string;
+  symbol: string | null;
+  message: string;
+  created_at: string;
+}
 
 interface MarketsResponse { markets: MarketRow[]; error?: string }
 interface DerivativesResponse { derivatives: DerivativeRow[]; error?: string }
@@ -76,8 +85,9 @@ interface DefiResponse { defi: DefiRow[]; error?: string }
 interface StablecoinsResponse { stablecoins: StablecoinRow[]; error?: string }
 interface GeoResponse { geo: GeoRow[]; error?: string }
 interface ComplianceResponse { compliance: ComplianceRow[]; error?: string }
+interface SignalsFeedResponse { signals: SignalRow[]; error?: string }
 
-type SectionKey = 'markets' | 'derivatives' | 'whales' | 'liquidations' | 'defi' | 'stablecoins' | 'geo' | 'compliance';
+type SectionKey = 'markets' | 'derivatives' | 'whales' | 'liquidations' | 'defi' | 'stablecoins' | 'geo' | 'compliance' | 'signals';
 
 const SECTIONS: { key: SectionKey; label: string; icon: LucideIcon }[] = [
   { key: 'markets', label: 'MARKETS', icon: TrendingUp },
@@ -88,6 +98,7 @@ const SECTIONS: { key: SectionKey; label: string; icon: LucideIcon }[] = [
   { key: 'stablecoins', label: 'STABLES', icon: Coins },
   { key: 'geo', label: 'GEO', icon: Globe2 },
   { key: 'compliance', label: 'COMPLIANCE', icon: ShieldAlert },
+  { key: 'signals', label: 'SIGNALS', icon: Siren },
 ];
 
 function useCryptoFeed<T>(endpoint: string, intervalMs = 30000): T | null {
@@ -163,6 +174,27 @@ export default function CryptoPanel() {
   // Show more rows per section when maximized — there's room for it.
   const rowLimit = (n: number) => (maximized ? n * 3 : n);
 
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteQr, setInviteQr] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteLoading, setInviteLoading] = useState(false);
+
+  const handleInviteClick = () => {
+    const next = !showInvite;
+    setShowInvite(next);
+    if (next && !inviteQr && !inviteLoading) {
+      setInviteLoading(true);
+      setInviteError(null);
+      getTelegramInviteQr()
+        .then((result) => {
+          if ('svg' in result) setInviteQr(result.svg);
+          else setInviteError(result.error);
+        })
+        .catch(() => setInviteError('İstek başarısız oldu'))
+        .finally(() => setInviteLoading(false));
+    }
+  };
+
   const markets = useCryptoFeed<MarketsResponse>('markets', 30000);
   const derivatives = useCryptoFeed<DerivativesResponse>('derivatives', 60000);
   const whales = useCryptoFeed<WhalesResponse>('whales', 60000);
@@ -171,6 +203,7 @@ export default function CryptoPanel() {
   const stablecoins = useCryptoFeed<StablecoinsResponse>('stablecoins', 300000);
   const geo = useCryptoFeed<GeoResponse>('geo', 3600000);
   const compliance = useCryptoFeed<ComplianceResponse>('compliance', 300000);
+  const signals = useCryptoFeed<SignalsFeedResponse>('signals-feed', 60000);
 
   const loadedBySection: Record<SectionKey, boolean> = {
     markets: markets !== null,
@@ -181,6 +214,7 @@ export default function CryptoPanel() {
     stablecoins: stablecoins !== null,
     geo: geo !== null,
     compliance: compliance !== null,
+    signals: signals !== null,
   };
 
   const firstMarket = markets?.markets?.[0];
@@ -195,6 +229,21 @@ export default function CryptoPanel() {
         </div>
         <div className="flex items-center gap-2">
           <div className="w-1.5 h-1.5 rounded-full bg-[var(--alert-green)] animate-osiris-pulse" />
+          <span className="relative">
+            <button onClick={(e) => { e.stopPropagation(); handleInviteClick(); }} className="hover:text-white transition-colors" title="Telegram'a Katıl">
+              <QrCode className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+            </button>
+            {showInvite && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="absolute right-0 top-full mt-2 z-[10000] w-48 p-3 rounded-lg border border-[var(--border-primary)] bg-[#0a0a09] shadow-xl"
+              >
+                {inviteLoading && <div className="text-[9px] font-mono text-[var(--text-muted)]">Yükleniyor...</div>}
+                {inviteError && <div className="text-[9px] font-mono text-[var(--alert-red)]">{inviteError}</div>}
+                {inviteQr && <div className="[&_svg]:w-full [&_svg]:h-auto" dangerouslySetInnerHTML={{ __html: inviteQr }} />}
+              </div>
+            )}
+          </span>
           <button onClick={(e) => { e.stopPropagation(); setMaximized(!maximized); if (!expanded && !maximized) setExpanded(true); }} className="hover:text-white transition-colors" title={maximized ? 'Restore' : 'Maximize'}>
             {maximized ? <Minimize2 className="w-3.5 h-3.5 text-[var(--text-muted)]" /> : <Maximize2 className="w-3.5 h-3.5 text-[var(--text-muted)]" />}
           </button>
@@ -329,6 +378,17 @@ export default function CryptoPanel() {
                       ))
                     : <EmptyRow label="Eşleşme yok (son 24s)" />}
                 </>
+              )}
+
+              {activeSection === 'signals' && signals && (
+                signals.signals.length
+                  ? signals.signals.slice(0, rowLimit(15)).map((s, i) => (
+                      <Row key={`${s.signal_type}-${s.created_at}-${i}`}
+                        left={s.message}
+                        right={s.symbol ?? s.signal_type}
+                        rightColor="var(--alert-red)" />
+                    ))
+                  : <EmptyRow label="Son 24 saatte kritik sinyal yok" />
               )}
             </div>
           </motion.div>
