@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getCryptoDb } from '@/lib/cryptoDb';
+import { constantTimeEqual } from '@/lib/session';
 
 export interface SignalRow {
   signal_type: string;
@@ -13,7 +14,7 @@ export interface SignalRow {
 export function isAuthorized(authHeader: string | null, expectedKey: string): boolean {
   if (!authHeader) return false;
   const match = authHeader.match(/^Bearer\s+(.+)$/);
-  return !!match && match[1] === expectedKey;
+  return !!match && constantTimeEqual(match[1], expectedKey);
 }
 
 export async function GET(req: Request) {
